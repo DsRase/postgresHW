@@ -1,0 +1,71 @@
+﻿- name: logical replication postgres preparation
+  hosts: replica
+  become: true
+  vars:
+    logical_dir: /pg_data/16-one-base
+    logical_port: 5544
+
+  tasks:
+    - name: create pg_data
+      ansible.builtin.file:
+        path: "{{ logical_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+
+    - name: create systemd unit directory
+      ansible.builtin.file:
+        path: /etc/systemd/system
+        state: directory
+        mode: '0755'
+
+    - name: install systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/postgresql-16-logical.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=postgresql 16 logical instance
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=postgres
+          Group=postgres
+          ExecStart=/usr/lib/postgresql/16/bin/pg_ctl -D {{ logical_data_dir }} -l /var/log/postgresql/postgresql-16-logical.log start
+          ExecStop=/usr/lib/postgresql/16/bin/pg_ctl -D {{ logical_data_dir }} stop
+          ExecReload=/usr/lib/postgresql/16/bin/pg_ctl -D {{ logical_data_dir }} reload
+          PIDFile={{ logical_data_dir }}/postmaster.pid
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: init cluster
+      ansible.builtin.command:
+        cmd: /usr/lib/postgresql/16/bin/initdb -D {{ logical_data_dir }} --locale=C --encoding=UTF8
+      become_user: postgres
+      args:
+        creates: "{{ logical_dir }}/PG_VERSION"
+
+    - name: set port
+      ansible.builtin.lineinfile:
+        path: "{{ logical_dir }}/postgresql.conf"
+        regexp: '^#?port\s*='
+        line: "port = {{ logical_port }}"
+
+    - name: set listen_addresses
+      ansible.builtin.lineinfile:
+        path: "{{ logical_dir }}/postgresql.conf"
+        regexp: '^#?listen_addresses\s*='
+        line: "listen_addresses = '*'"
+
+    - name: enable service
+      ansible.builtin.systemd:
+        name: postgresql-16-logical.service
+        enabled: true
+        state: started
