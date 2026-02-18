@@ -1,0 +1,77 @@
+﻿- name: master postgres preparing
+  hosts: primary
+  become: yes
+  vars:
+    base_packages:
+      - gnupg2
+      - curl
+      - python3-psycopg2
+      - ca-certificates
+      - lsb-release
+
+    postgres_packages:
+      - postgresql-16
+      - postgresql-contrib-16
+      - postgresql-client-16
+
+  tasks:
+    - name: apt update
+      ansible.builtin.apt:
+        update_cache: true
+      ignore_errors: yes
+
+    - name: base packages
+      ansible.builtin.apt:
+        name: "{{ base_packages }}"
+        state: present
+
+    - name: add postgres key
+      ansible.builtin.get_url:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        dest: /tmp/ACCC4CF8.asc
+        mode: '0644'
+
+    - name: convert gpg key to keyring
+      ansible.builtin.command:
+        cmd: gpg --dearmor -o /usr/share/keyrings/postgresql.gpg /tmp/ACCC4CF8.asc
+      args:
+        creates: /usr/share/keyrings/postgresql.gpg
+
+    - name: add pgdg apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/pgdg.list
+        mode: '0644'
+        content: |
+          deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main
+    
+
+    - name: apt update again
+      ansible.builtin.apt:
+        update_cache: true
+      ignore_errors: true
+
+    - name: postgres packages
+      ansible.builtin.apt:
+        name: "{{ postgres_packages }}"
+        state: present
+
+    - name: create pg_data
+      ansible.builtin.file:
+        path: /pg_data
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+
+    - name: stop postgres
+      ansible.builtin.systemd:
+        name: postgresql
+        state: stopped
+        enabled: true
+
+    - name: drop default cluster
+      ansible.builtin.command:
+        cmd: pg_dropcluster --stop 16 main
+      register: drop_cluster
+      changed_when: drop_cluster.rc == 0
+      failed_when: drop_cluster.rc not in [0, 1]
